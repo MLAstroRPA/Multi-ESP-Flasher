@@ -3,19 +3,22 @@
 """
 Multi-ESP-Flasher
 =================
-Công cụ CLI flash LIÊN TỤC (multi-flash) cho nhiều thiết bị ESP32.
+Công cụ CLI flash LIÊN TỤC (multi-flash) cho nhiều thiết bị ESP32 / ESP8266.
 
 Tính năng:
-    - BƯỚC 1: quét các THƯ MỤC CON cùng cấp với file exe để liệt kê sản phẩm phần cứng.
-    - BƯỚC 2: sau khi chọn sản phẩm, chọn LẦN LƯỢT 4 file bin
-              (bootloader, partitions, firmware, spiffs) + mục thứ 5 cho
-              combine.bin (merged). Ghi nhớ lựa chọn cho từng sản phẩm bằng
-              file .db.txt (cạnh exe), tự nạp lại khi mở; nếu thư mục sản phẩm
-              không còn thì cập nhật lại db.
-    - BƯỚC 3: chọn AUTO / CONFIRM MULTI FLASH
-    - BƯỚC 4: quét & chọn cổng COM
-    - BƯỚC 5: vòng lặp flash
-    - BƯỚC 6: báo cáo số lượng board đã nạp
+    - BƯỚC 1: chọn LOẠI ESP (ESP32 / ESP32-S3 / ESP32-C3 / ESP8266).
+              Ghi nhớ lựa chọn vào .db.txt (cạnh exe) và tự nạp lại khi mở.
+    - BƯỚC 2: quét các THƯ MỤC CON cùng cấp với file exe để liệt kê sản phẩm phần cứng.
+    - BƯỚC 3: sau khi chọn sản phẩm, chọn LẦN LƯỢT các file bin của loại ESP
+              đã chọn (ESP32: bootloader, partitions, firmware, spiffs;
+              ESP8266: firmware, spiffs) + mục cuối cho combine.bin (merged).
+              Ghi nhớ lựa chọn cho từng sản phẩm bằng file .db.txt (cạnh exe),
+              tự nạp lại khi mở; nếu thư mục sản phẩm không còn thì cập nhật
+              lại db.
+    - BƯỚC 4: chọn AUTO / CONFIRM MULTI FLASH
+    - BƯỚC 5: quét & chọn cổng COM
+    - BƯỚC 6: vòng lặp flash
+    - BƯỚC 7: báo cáo số lượng board đã nạp
 """
 
 import os
@@ -26,26 +29,73 @@ import time
 import ctypes
 import subprocess
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 APP_NAME = "Multi-ESP-Flasher"
 DB_FILE = "Multi-ESP-Flasher.db.txt"
+# Khoá "đặc biệt" trong db.txt dùng để ghi nhớ lựa chọn loại ESP (không phải sản phẩm).
+CHIP_DB_KEY = "__chip__"
 
 IS_WINDOWS = os.name == "nt"
 
-CHIP = "esp32"
-BAUD = "921600"
-
-ADDR = {
-    "bootloader": "0x1000",
-    "partitions": "0x8000",
-    "firmware":   "0x10000",
-    "spiffs":     "0x290000",
+# ---------------------------------------------------------------------------
+# Cấu hình theo từng LOẠI ESP (BƯỚC 1)
+#   label         : tên hiển thị trong menu
+#   chip          : giá trị truyền cho esptool (--chip)
+#   baud          : tốc độ nạp
+#   kinds         : các slot file rời (thứ tự hiển thị ở bước chọn file)
+#   addr          : offset ghi cho từng slot file rời
+#   erase_ota     : vùng OTA boot data cần xoá trước khi flash (None = không xoá)
+#   combined_addr : offset cho file gộp (merged)
+# ---------------------------------------------------------------------------
+CHIP_PROFILES = {
+    "esp32": {
+        "key":    "esp32",
+        "label":  "ESP32     | bootloader 0x1000 · app 0x10000 · spiffs 0x290000",
+        "chip":   "esp32",
+        "baud":   "921600",
+        "kinds":  ("bootloader", "partitions", "firmware", "spiffs"),
+        "addr":   {"bootloader": "0x1000", "partitions": "0x8000",
+                   "firmware": "0x10000", "spiffs": "0x290000"},
+        "erase_ota": ("0xE000", "0x2000"),
+        "combined_addr": "0x0",
+    },
+    "esp32s3": {
+        "key":    "esp32s3",
+        "label":  "ESP32-S3  | bootloader 0x0 · app 0x10000 · spiffs 0x290000",
+        "chip":   "esp32s3",
+        "baud":   "921600",
+        "kinds":  ("bootloader", "partitions", "firmware", "spiffs"),
+        "addr":   {"bootloader": "0x0", "partitions": "0x8000",
+                   "firmware": "0x10000", "spiffs": "0x290000"},
+        "erase_ota": ("0xE000", "0x2000"),
+        "combined_addr": "0x0",
+    },
+    "esp32c3": {
+        "key":    "esp32c3",
+        "label":  "ESP32-C3  | bootloader 0x0 · app 0x10000 · spiffs 0x290000",
+        "chip":   "esp32c3",
+        "baud":   "921600",
+        "kinds":  ("bootloader", "partitions", "firmware", "spiffs"),
+        "addr":   {"bootloader": "0x0", "partitions": "0x8000",
+                   "firmware": "0x10000", "spiffs": "0x290000"},
+        "erase_ota": ("0xE000", "0x2000"),
+        "combined_addr": "0x0",
+    },
+    "esp8266": {
+        "key":    "esp8266",
+        "label":  "ESP8266   | firmware 0x0 · spiffs 0x100000 (không có vùng OTA)",
+        "chip":   "esp8266",
+        "baud":   "460800",
+        "kinds":  ("firmware", "spiffs"),
+        "addr":   {"firmware": "0x0", "spiffs": "0x100000"},
+        "erase_ota": None,
+        "combined_addr": "0x0",
+    },
 }
-KIND_ORDER = ("bootloader", "partitions", "firmware", "spiffs")
-KINDS_ALL = ("bootloader", "partitions", "firmware", "spiffs", "combined")
-COMBINED_ADDR = "0x0"
+CHIP_ORDER = ("esp32", "esp32s3", "esp32c3", "esp8266")
+DEFAULT_CHIP = "esp32"
 
-# Lưu lỗi flash/esptool cuối cùng để hiển thị lại ở BƯỚC 6 (vì BƯỚC 6 xóa màn hình).
+# Lưu lỗi flash/esptool cuối cùng để hiển thị lại ở BƯỚC 7 (vì BƯỚC 7 xóa màn hình).
 LAST_ERROR = ""
 
 if IS_WINDOWS:
@@ -164,8 +214,9 @@ def err(msg):  print(red("[ERR] ") + msg)
 def banner():
     print("=" * 62)
     print("          M U L T I - E S P - F L A S H E R   v" + APP_VERSION)
-    print("        Quét sản phẩm & flash liên tục nhiều thiết bị ESP32")
-    print("   bootloader.bin | partitions.bin | firmware.bin | spiffs.bin")
+    print("      Quét sản phẩm & flash liên tục nhiều thiết bị ESP32 / ESP8266")
+    print("   ESP32: bootloader | partitions | firmware | spiffs (+ combined)")
+    print("   ESP8266: firmware | spiffs (+ combined)")
     print("=" * 62)
     print("   Author: Nguyễn Công Đức    |    congduc1352@gmail.com")
 
@@ -256,12 +307,12 @@ def flush_keys():
         pass
 
 
-def arrow_menu(title, items, allow_refresh=False, refresh_fn=None):
+def arrow_menu(title, items, allow_refresh=False, refresh_fn=None, start_idx=0):
     """Menu ↑/↓, Enter xác nhận, ESC hủy. Trả về value hoặc None."""
-    idx = 0
+    idx = start_idx
     while True:
         if items:
-            idx = min(idx, len(items) - 1)
+            idx = max(0, min(idx, len(items) - 1))
         header = [
             "=" * 62,
             "  " + title,
@@ -492,7 +543,29 @@ def step1_check_esptool():
 
 
 # ---------------------------------------------------------------------------
-# BƯỚC 1 - Quét thư mục con cùng cấp với exe -> danh sách sản phẩm phần cứng
+# BƯỚC 1 - Chọn LOẠI ESP (ESP32 / ESP32-S3 / ESP32-C3 / ESP8266)
+# ---------------------------------------------------------------------------
+def select_chip_menu(default_key=DEFAULT_CHIP):
+    """BƯỚC 1: chọn loại ESP. Trả về khoá profile (vd 'esp32') hoặc None nếu ESC."""
+    idx = CHIP_ORDER.index(default_key) if default_key in CHIP_ORDER else 0
+    items = []
+    for key in CHIP_ORDER:
+        prof = CHIP_PROFILES[key]
+        mark = "  <- đã dùng lần trước" if key == default_key else ""
+        items.append((f"{prof['label']}{mark}", key))
+    return arrow_menu("BƯỚC 1: CHỌN LOẠI ESP", items, start_idx=idx)
+
+
+def chip_label(chip_key):
+    """Tên ngắn gọn của loại ESP (phần đầu của label)."""
+    prof = CHIP_PROFILES.get(chip_key)
+    if not prof:
+        return str(chip_key)
+    return prof["label"].split("|")[0].strip()
+
+
+# ---------------------------------------------------------------------------
+# BƯỚC 2 - Quét thư mục con cùng cấp với exe -> danh sách sản phẩm phần cứng
 # ---------------------------------------------------------------------------
 def exe_dir():
     return (os.path.dirname(sys.executable)
@@ -533,7 +606,7 @@ def select_product(products):
     if not items:
         warn("Không có thư mục sản phẩm nào (quét các thư mục con cùng cấp với exe).")
         return None
-    return arrow_menu("BƯỚC 1: CHỌN SẢN PHẨM PHẦN CỨNG",
+    return arrow_menu("BƯỚC 2: CHỌN SẢN PHẨM PHẦN CỨNG",
                       items, allow_refresh=True, refresh_fn=_items)
 
 
@@ -578,6 +651,8 @@ def sync_products_db(db, product_names):
     names = set(product_names)
     changed = False
     for key in list(db.keys()):
+        if str(key).startswith("__"):
+            continue    # khoá đặc biệt (vd __chip__) - không phải sản phẩm
         if key not in names:
             del db[key]
             changed = True
@@ -590,11 +665,13 @@ def sync_products_db(db, product_names):
 
 
 # ---------------------------------------------------------------------------
-# BƯỚC 2 - Chọn lần lượt 4 file bin (+ combine.bin) cho sản phẩm
+# BƯỚC 3 - Chọn lần lượt các file bin (+ combine.bin) cho sản phẩm
 # ---------------------------------------------------------------------------
-def configure_product_files(product_name, product_dir, db, save_to_db=True):
-    """BƯỚC 2: menu chọn LẦN LƯỢT các file bin cho sản phẩm; lưu vào db
-    (save_to_db=False khi chọn file ngoài, không ghi nhớ db)."""
+def configure_product_files(product_name, product_dir, db, profile, save_to_db=True):
+    """BƯỚC 3: menu chọn LẦN LƯỢT các file bin cho sản phẩm; lưu vào db
+    (save_to_db=False khi chọn file ngoài, không ghi nhớ db).
+    Các slot hiển thị phụ thuộc LOẠI ESP đã chọn ở BƯỚC 1 (profile)."""
+    slot_kinds = tuple(profile["kinds"]) + ("combined",)
     # Chỉ nạp lại các file db tồn tại thật trên đĩa;
     # không có db hoặc file không tìm thấy -> để "(chưa chọn)"
     mapping = {k: p for k, p in (db.get(product_name, {}) or {}).items()
@@ -611,7 +688,7 @@ def configure_product_files(product_name, product_dir, db, save_to_db=True):
 
     while True:
         items = []
-        for kind in KINDS_ALL:
+        for kind in slot_kinds:
             p = mapping.get(kind)
             name = f"{kind}.bin"
             if valid_slot_path(p):
@@ -622,12 +699,13 @@ def configure_product_files(product_name, product_dir, db, save_to_db=True):
             items.append((label, kind))
         items.append(("Tiếp theo >>>", "__done__"))
         if not entered:
-            # Chuyển từ BƯỚC 1 sang BƯỚC 2: đưa selector xuống mục cuối "Tiếp theo >>>"
+            # Chuyển từ BƯỚC 2 sang BƯỚC 3: đưa selector xuống mục cuối "Tiếp theo >>>"
             idx = len(items) - 1
             entered = True
 
-        title = (f"  BƯỚC 2: CHỌN FILE CHO SẢN PHẨM \"{product_name}\""
-                 if save_to_db else "  BƯỚC 2: CHỌN FILE BIN NGOÀI (KHÔNG LƯU)")
+        title = (f"  BƯỚC 3: CHỌN FILE CHO SẢN PHẨM \"{product_name}\" "
+                 f"[{chip_label(profile['key'])}]"
+                 if save_to_db else "  BƯỚC 3: CHỌN FILE BIN NGOÀI (KHÔNG LƯU)")
         note = ("  ENTER tại 'Tiếp theo >>>' để lưu & tiếp tục."
                 if save_to_db else "  ENTER tại 'Tiếp theo >>>' để tiếp tục (không lưu).")
         header = [
@@ -694,18 +772,18 @@ def configure_product_files(product_name, product_dir, db, save_to_db=True):
 
 
 # ---------------------------------------------------------------------------
-# BƯỚC 3 - Chọn chế độ flash
+# BƯỚC 4 - Chọn chế độ flash
 # ---------------------------------------------------------------------------
 def select_mode_menu():
     items = [
         ("a) AUTO MULTI FLASH     - sau khi flash, tự phát hiện cổng COM online và flash tiếp", "auto"),
         ("b) CONFIRM MULTI FLASH  - sau khi flash, đợi nhấn Enter để flash tiếp / ESC thoát", "confirm"),
     ]
-    return arrow_menu("BƯỚC 3: CHỌN CHẾ ĐỘ FLASH", items)
+    return arrow_menu("BƯỚC 4: CHỌN CHẾ ĐỘ FLASH", items)
 
 
 # ---------------------------------------------------------------------------
-# BƯỚC 4 - Quét & chọn cổng COM
+# BƯỚC 5 - Quét & chọn cổng COM
 # ---------------------------------------------------------------------------
 def list_ports():
     try:
@@ -738,12 +816,12 @@ def port_present(port):
 def select_com_port():
     def _items():
         return [(f"{dev}   {desc}".rstrip(), dev) for dev, desc in list_ports()]
-    return arrow_menu("BƯỚC 4: QUÉT & CHỌN CỔNG COM",
+    return arrow_menu("BƯỚC 5: QUÉT & CHỌN CỔNG COM",
                       _items(), allow_refresh=True, refresh_fn=_items)
 
 
 # ---------------------------------------------------------------------------
-# BƯỚC 5 - Vòng lặp flash
+# BƯỚC 6 - Vòng lặp flash
 # ---------------------------------------------------------------------------
 def run_esptool(args):
     global LAST_ERROR
@@ -777,47 +855,56 @@ def run_esptool(args):
         return 1
 
 
-def flash_once(port, mapping):
+def flash_once(port, mapping, profile):
     global LAST_ERROR
+    chip = profile["chip"]
+    baud = profile["baud"]
+    addr = profile["addr"]
+    kinds_order = profile["kinds"]
+    combined_addr = profile["combined_addr"]
+    erase_ota = profile["erase_ota"]
 
-    # File combined/merged: 1 file ghi nguyên khối tại 0x0
+    def _erase_ota_region():
+        if not erase_ota:
+            return 0
+        info(f"Đang xóa OTA boot data ({erase_ota[0]}, {erase_ota[1]}) ...")
+        return run_esptool(["--chip", chip, "--port", port,
+                            "erase-region", erase_ota[0], erase_ota[1]])
+
+    # File combined/merged: 1 file ghi nguyên khối tại combined_addr
     if mapping.get("combined"):
         path = mapping["combined"]
         if not os.path.isfile(path):
             LAST_ERROR = f"File không tồn tại: {path}"
             err(LAST_ERROR)
             return 1
-        info("Đang xóa OTA boot data (0xE000, 0x2000) ...")
-        if run_esptool(["--chip", CHIP, "--port", port,
-                        "erase-region", "0xE000", "0x2000"]) != 0:
+        if _erase_ota_region() != 0:
             LAST_ERROR = LAST_ERROR or "Xóa OTA boot data thất bại."
             err(LAST_ERROR)
             return 1
-        info(f"Ghi flash combined (merged) @ {COMBINED_ADDR} ...")
-        return run_esptool(["--chip", CHIP, "--port", port, "--baud", BAUD,
-                            "write-flash", "-z", COMBINED_ADDR, path])
+        info(f"Ghi flash combined (merged) @ {combined_addr} ...")
+        return run_esptool(["--chip", chip, "--port", port, "--baud", baud,
+                            "write-flash", "-z", combined_addr, path])
 
-    kinds = [k for k in KIND_ORDER if mapping.get(k)]
+    kinds = [k for k in kinds_order if mapping.get(k)]
     for k in kinds:
         if not os.path.isfile(mapping[k]):
             LAST_ERROR = f"File không tồn tại: {mapping[k]}"
             err(LAST_ERROR)
             return 1
 
-    # Xóa OTA boot data (giống các script .vscode hiện có)
-    if any(k in ("bootloader", "partitions", "firmware") for k in kinds):
-        info("Đang xóa OTA boot data (0xE000, 0x2000) ...")
-        if run_esptool(["--chip", CHIP, "--port", port,
-                        "erase-region", "0xE000", "0x2000"]) != 0:
+    # Xóa OTA boot data (chỉ với loại ESP có vùng OTA, ví dụ ESP32)
+    if erase_ota and any(k in ("bootloader", "partitions", "firmware") for k in kinds):
+        if _erase_ota_region() != 0:
             LAST_ERROR = LAST_ERROR or "Xóa OTA boot data thất bại."
             err(LAST_ERROR)
             return 1
 
-    args = ["--chip", CHIP, "--port", port, "--baud", BAUD,
+    args = ["--chip", chip, "--port", port, "--baud", baud,
             "write-flash", "-z"]
     for k in kinds:
-        args += [ADDR[k], mapping[k]]
-    info("Ghi flash: " + ", ".join(f"{k} @ {ADDR[k]}" for k in kinds))
+        args += [addr[k], mapping[k]]
+    info("Ghi flash: " + ", ".join(f"{k} @ {addr[k]}" for k in kinds))
     return run_esptool(args)
 
 
@@ -898,10 +985,10 @@ def play_success_bell():
         pass
 
 
-def run_multi_flash(port, mapping, mode):
+def run_multi_flash(port, mapping, profile, mode):
     info(f"Bắt đầu flash lên {bold(port)} ...")
     print("  LƯU Ý: không cho phép thoát (ESC) trong lúc đang flash.")
-    result = flash_once(port, mapping)
+    result = flash_once(port, mapping, profile)
     if result != 0:
         err("Flash THẤT BẠI. Kiểm tra cổng COM / kết nối rồi thử lại.")
         return "error"
@@ -936,15 +1023,15 @@ def run_multi_flash(port, mapping, mode):
 
 
 # ---------------------------------------------------------------------------
-# BƯỚC 6 - Báo cáo số lượng
+# BƯỚC 7 - Báo cáo số lượng
 # ---------------------------------------------------------------------------
-def step6_summary(flashed, error=""):
+def step7_summary(flashed, error=""):
     if IS_WINDOWS:
         os.system("cls")
     else:
         os.system("clear")
     print("=" * 62)
-    print("  BƯỚC 6: BÁO CÁO")
+    print("  BƯỚC 7: BÁO CÁO")
     print("=" * 62)
     print()
     ctx = _temporarily_double_font()
@@ -981,6 +1068,18 @@ def main():
 
     db = ensure_db()
 
+    # BƯỚC 1: chọn LOẠI ESP (ghi nhớ lựa chọn vào db)
+    saved_chip = db.get(CHIP_DB_KEY)
+    if saved_chip not in CHIP_PROFILES:
+        saved_chip = DEFAULT_CHIP
+    chip_key = select_chip_menu(saved_chip)
+    if chip_key is None:
+        return 0        # ESC hủy -> đóng ứng dụng
+    profile = CHIP_PROFILES[chip_key]
+    if db.get(CHIP_DB_KEY) != chip_key:
+        db[CHIP_DB_KEY] = chip_key
+        save_db(db)
+
     while True:
         products = scan_products()
         sync_products_db(db, [n for n, _ in products])
@@ -1000,26 +1099,27 @@ def main():
             product = "(file ngoài)"
             save_to_db = False
         else:
-            # BƯỚC 1: chọn sản phẩm phần cứng
+            # BƯỚC 2: chọn sản phẩm phần cứng
             product = select_product(products)
             if product is None:
                 return 0    # ESC hủy -> đóng ứng dụng
             product_dir = next((d for n, d in products if n == product), None)
 
-        # BƯỚC 2: chọn lần lượt các file bin (+ combine) - ghi nhớ db
-        mapping = configure_product_files(product, product_dir, db, save_to_db=save_to_db)
+        # BƯỚC 3: chọn lần lượt các file bin (+ combine) - ghi nhớ db
+        mapping = configure_product_files(product, product_dir, db, profile,
+                                          save_to_db=save_to_db)
         if mapping is None:
             continue    # ESC -> quay lại đầu (chọn sản phẩm / hỏi lại)
         if not mapping:
             warn("Không có file bin nào được chọn.")
             continue
 
-        # BƯỚC 3: chọn chế độ
+        # BƯỚC 4: chọn chế độ
         mode = select_mode_menu()
         if mode is None:
             return 0    # ESC hủy -> đóng ứng dụng
 
-        # BƯỚC 4: chọn cổng COM
+        # BƯỚC 5: chọn cổng COM
         port = select_com_port()
         if port is None:
             return 0    # ESC hủy -> đóng ứng dụng
@@ -1029,27 +1129,29 @@ def main():
         print("=" * 62)
         print("  TÓM TẮT CẤU HÌNH")
         print("=" * 62)
+        print(f"  Loại ESP : {chip_label(chip_key)}  (--chip {profile['chip']})")
         print(f"  Sản phẩm : {product}")
         print(f"  Cổng COM : {port}")
         print(f"  Chế độ   : {'AUTO MULTI FLASH' if mode == 'auto' else 'CONFIRM MULTI FLASH'}")
         print("  Files    :")
         if mapping.get("combined"):
-            print(f"    {'combined':<12} -> {COMBINED_ADDR} : {short_path(mapping['combined'])}")
+            print(f"    {'combined':<12} -> {profile['combined_addr']} : {short_path(mapping['combined'])}")
         else:
-            for k in KIND_ORDER:
+            for k in profile["kinds"]:
                 if mapping.get(k):
-                    print(f"    {k:<12} -> {ADDR[k]} : {short_path(mapping[k])}")
+                    print(f"    {k:<12} -> {profile['addr'][k]} : {short_path(mapping[k])}")
         if not ask_yn("\nBắt đầu flash với cấu hình trên?"):
             continue
 
-        # BƯỚC 5: vòng lặp flash (màn hình riêng)
+        # BƯỚC 6: vòng lặp flash (màn hình riêng)
         if IS_WINDOWS:
             os.system("cls")
         else:
             os.system("clear")
         print("=" * 62)
-        print("  BƯỚC 5: VÒNG LẶP FLASH")
+        print("  BƯỚC 6: VÒNG LẶP FLASH")
         print("=" * 62)
+        print(f"  Loại ESP : {chip_label(chip_key)}")
         print(f"  Sản phẩm : {product}")
         print(f"  Cổng COM : {port}")
         print(f"  Chế độ   : {'AUTO MULTI FLASH' if mode == 'auto' else 'CONFIRM MULTI FLASH'}")
@@ -1058,15 +1160,15 @@ def main():
         flashed = 0
         result = None
         while result not in ("exit", "error"):
-            result = run_multi_flash(port, mapping, mode)
+            result = run_multi_flash(port, mapping, profile, mode)
             # "again" = flash thành công (đang chờ); "exit" = flash thành công rồi thoát
             if result in ("again", "exit"):
                 flashed += 1
         if result == "error":
             warn("Vòng flash đã dừng do lỗi.")
 
-        # BƯỚC 6: báo cáo số lượng, rồi đóng cửa sổ
-        step6_summary(flashed, LAST_ERROR)
+        # BƯỚC 7: báo cáo số lượng, rồi đóng cửa sổ
+        step7_summary(flashed, LAST_ERROR)
         return 0
 
     pause_end()
