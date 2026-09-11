@@ -52,6 +52,13 @@ Mọi loại đều có thêm mục **`combined.bin`** (file gộp/merged) → f
 
 ### BƯỚC 5 — Quét & chọn cổng COM
 - **↑/↓** chọn, **R/F5** quét lại, **Enter** chọn, **ESC** đóng ứng dụng.
+- **Kiểm tra cổng đang bận:** sau khi chọn, tool mở thử cổng đó (giữ DTR/RTS thấp để không reset board).
+  - Nếu cổng **đang bị ứng dụng khác mở** (N.I.N.A., WebUI MLAstroRPA serial terminal, Arduino IDE/PuTTY,
+    cửa sổ Multi-ESP-Flasher khác…) → tool **tạm dừng**, hiện cảnh báo *CỔNG COM ĐANG BẬN* kèm gợi ý đóng cổng
+    ở ứng dụng kia và chờ xác nhận:
+    - **Enter** = tiếp tục flash với cổng đã chọn (sẽ lỗi nếu cổng còn bận)
+    - **R** = kiểm tra lại (sau khi đã đóng ứng dụng kia)
+    - **ESC** = hủy
 
 ### BƯỚC 6 — Vòng lặp flash
 - **Auto:** flash xong → chờ rút/cắm USB → **đếm ngược 5s chống debounce** → tự flash tiếp; ESC thoát ngoài lúc flash; không thoát khi đang flash.

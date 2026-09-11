@@ -16,7 +16,8 @@ Tính năng:
               tự nạp lại khi mở; nếu thư mục sản phẩm không còn thì cập nhật
               lại db.
     - BƯỚC 4: chọn AUTO / CONFIRM MULTI FLASH
-    - BƯỚC 5: quét & chọn cổng COM
+    - BƯỚC 5: quét & chọn cổng COM (nếu cổng đang bị ứng dụng khác mở thì tạm dừng,
+              hướng dẫn đóng cổng ở ứng dụng kia rồi xác nhận mới flash tiếp)
     - BƯỚC 6: vòng lặp flash
     - BƯỚC 7: báo cáo số lượng board đã nạp
 """
@@ -29,7 +30,7 @@ import time
 import ctypes
 import subprocess
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 APP_NAME = "Multi-ESP-Flasher"
 DB_FILE = "Multi-ESP-Flasher.db.txt"
 # Khoá "đặc biệt" trong db.txt dùng để ghi nhớ lựa chọn loại ESP (không phải sản phẩm).
@@ -820,6 +821,108 @@ def select_com_port():
                       _items(), allow_refresh=True, refresh_fn=_items)
 
 
+def probe_com_port(port):
+    """Mở thử cổng COM để biết cổng có đang bị ứng dụng khác chiếm không.
+
+    Trả về (state, message):
+        "ready"   - cổng mở được (đang rảnh)
+        "busy"    - ứng dụng khác đang giữ cổng (Access denied / Device busy)
+        "unknown" - không kiểm tra được (thiếu pyserial / lỗi khác) -> vẫn tiếp tục
+    """
+    try:
+        import serial
+    except Exception:
+        return ("unknown", "pyserial không khả dụng")
+
+    ser = serial.Serial()
+    ser.port = port
+    ser.baudrate = 115200
+    ser.timeout = 0
+    ser.write_timeout = 0
+    ser.dsrdtr = False
+    ser.rtscts = False
+    # Giữ DTR/RTS ở mức thấp để việc kiểm tra KHÔNG reset ESP32.
+    try:
+        ser.dtr = False
+        ser.rts = False
+    except Exception:
+        pass
+
+    try:
+        ser.open()
+    except PermissionError as exc:
+        return ("busy", str(exc))
+    except Exception as exc:
+        msg = str(exc)
+        low = msg.lower()
+        if any(k in low for k in ("access is denied", "access denied", "permission",
+                                  "in use", "busy", "errno 16", "errno 13")):
+            return ("busy", msg)
+        return ("unknown", msg)
+
+    try:
+        ser.close()
+    except Exception:
+        pass
+    return ("ready", "")
+
+
+def render_port_busy(port, reason):
+    """Màn hình cảnh báo: cổng COM đang bị ứng dụng khác giữ."""
+    if IS_WINDOWS:
+        os.system("cls")
+    else:
+        os.system("clear")
+    print("=" * 62)
+    print("  CỔNG COM ĐANG BẬN")
+    print("=" * 62)
+    print()
+    print(red(f"  Cổng {port} đang bị MỞ bởi một ứng dụng khác."))
+    print()
+    print("  Hãy đóng cổng đó ở ứng dụng kia trước khi flash, ví dụ:")
+    print("    - N.I.N.A. (tab CONNECTION của plugin MLAstroRPA+TPPA)")
+    print("    - WebUI MLAstroRPA (serial terminal) / TestTool mock server")
+    print("    - Arduino IDE (Serial Monitor), PuTTY, terminal khác, script Python")
+    print("    - một cửa sổ Multi-ESP-Flasher khác đang chạy")
+    print()
+    print("  " + bold("ENTER") + " = tiếp tục flash với " + bold(port)
+          + " (vẫn lỗi nếu cổng còn bận)")
+    print("  " + bold("R") + "     = kiểm tra lại (sau khi đã đóng ứng dụng kia)")
+    print("  " + bold("ESC") + "   = hủy")
+    print()
+    print("  Chi tiết: " + str(reason))
+    print()
+
+
+def ensure_port_free(port):
+    """Nếu cổng đang bị ứng dụng khác chiếm: tạm dừng, hướng dẫn đóng cổng ở ứng
+    dụng kia, rồi chờ người dùng xác nhận (ENTER = tiếp tục, R = thử lại, ESC = hủy).
+
+    Trả về True để tiếp tục flash, False nếu người dùng hủy."""
+    while True:
+        state, message = probe_com_port(port)
+        if state == "ready":
+            return True
+        if state == "unknown":
+            if message and message != "pyserial không khả dụng":
+                warn(f"Không mở được {port} để kiểm tra — bỏ qua bước này ({message})")
+            return True
+
+        render_port_busy(port, message)
+        flush_keys()
+        while True:
+            key = read_key(True)
+            if key is None:
+                time.sleep(0.05)      # console không hỗ trợ đọc phím -> tránh loop nóng
+                continue
+            if key == "enter":
+                return True           # người dùng xác nhận: tiếp tục với cổng đã chọn
+            if key in ("refresh", "f5"):
+                break                 # kiểm tra lại cổng
+            if key == "esc":
+                return False          # hủy
+
+
 # ---------------------------------------------------------------------------
 # BƯỚC 6 - Vòng lặp flash
 # ---------------------------------------------------------------------------
@@ -1122,6 +1225,9 @@ def main():
         # BƯỚC 5: chọn cổng COM
         port = select_com_port()
         if port is None:
+            return 0    # ESC hủy -> đóng ứng dụng
+        # Cổng đang bị ứng dụng khác giữ -> tạm dừng và bắt xác nhận trước khi flash
+        if not ensure_port_free(port):
             return 0    # ESC hủy -> đóng ứng dụng
 
         # Tóm tắt + xác nhận
