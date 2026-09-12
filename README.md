@@ -35,7 +35,12 @@ Mọi loại đều có thêm mục **`combined.bin`** (file gộp/merged) → f
 
 ### BƯỚC 2 — Chọn sản phẩm phần cứng
 - Tool **quét các THƯ MỤC CON cùng cấp với file exe** (các thư mục nằm trong cùng thư mục chứa exe) và hiển thị danh sách sản phẩm.
+- Nếu bin nằm ở nơi khác, chọn mục cuối **`Duyệt thư mục khác...`** → mở hộp thoại chọn thư mục (hủy hộp thoại = quay lại BƯỚC 2).
+  - Thư mục vừa duyệt được **ghi nhớ** vào `Multi-ESP-Flasher.db.txt` (khoá = đường dẫn tuyệt đối, khoá `__browse_dir__` cho lần duyệt kế tiếp)
+    và xuất hiện lại trong danh sách với tiền tố **`[ngoài]`**; nếu thư mục không còn tồn tại thì tự xóa khỏi db.
+  - Nếu duyệt đúng một thư mục sản phẩm cạnh exe thì dùng luôn tên sản phẩm đó (không tạo mục `[ngoài]` trùng).
 - Chọn bằng phím **↑/↓**, **Enter** chọn, **ESC** đóng ứng dụng, **R/F5** quét lại.
+- Nếu **không có** thư mục sản phẩm nào cạnh exe, BƯỚC 2 chỉ còn mục `Duyệt thư mục khác...` — vẫn flash được bình thường.
 
 ### BƯỚC 3 — Chọn lần lượt các file bin cho sản phẩm
 - Chọn **từng loại một** theo loại ESP đã chọn ở BƯỚC 1:
@@ -80,4 +85,4 @@ Mọi loại đều có thêm mục **`combined.bin`** (file gộp/merged) → f
 - Không cần cài Python/esptool (exe bundle sẵn).
 - Cần **driver USB-serial** của board (CH340/CP210x) nếu máy mới chưa có — không sẽ không thấy cổng COM.
 - Exe không ký số → SmartScreen cảnh báo thì bấm *More info → Run anyway*.
-- **Lưu ý quét sản phẩm:** ứng dụng quét các **thư mục con nằm trong cùng thư mục chứa file exe** (ví dụ exe ở `bin\MLAstro-Multi-ESP-Flasher.exe` → quét các thư mục bên trong `bin\`). Muốn thêm sản phẩm, chỉ cần tạo thư mục trong cùng thư mục exe và đặt các file bin vào đó.
+- **Lưu ý quét sản phẩm:** ứng dụng quét các **thư mục con nằm trong cùng thư mục chứa file exe** (ví dụ exe ở `bin\MLAstro-Multi-ESP-Flasher.exe` → quét các thư mục bên trong `bin\`). Muốn thêm sản phẩm, chỉ cần tạo thư mục trong cùng thư mục exe và đặt các file bin vào đó. Bin nằm ở nơi khác thì dùng **`Duyệt thư mục khác...`** ở BƯỚC 2 (không cần copy vào `bin\`).

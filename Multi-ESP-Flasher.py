@@ -8,7 +8,9 @@ Công cụ CLI flash LIÊN TỤC (multi-flash) cho nhiều thiết bị ESP32 / 
 Tính năng:
     - BƯỚC 1: chọn LOẠI ESP (ESP32 / ESP32-S3 / ESP32-C3 / ESP8266).
               Ghi nhớ lựa chọn vào .db.txt (cạnh exe) và tự nạp lại khi mở.
-    - BƯỚC 2: quét các THƯ MỤC CON cùng cấp với file exe để liệt kê sản phẩm phần cứng.
+    - BƯỚC 2: quét các THƯ MỤC CON cùng cấp với file exe để liệt kê sản phẩm phần cứng,
+              kèm mục "Duyệt thư mục khác..." để chọn thư mục bin nằm ở nơi khác
+              (thư mục ngoài được ghi nhớ trong .db.txt để lần sau chọn nhanh).
     - BƯỚC 3: sau khi chọn sản phẩm, chọn LẦN LƯỢT các file bin của loại ESP
               đã chọn (ESP32: bootloader, partitions, firmware, spiffs;
               ESP8266: firmware, spiffs) + mục cuối cho combine.bin (merged).
@@ -35,6 +37,11 @@ APP_NAME = "Multi-ESP-Flasher"
 DB_FILE = "Multi-ESP-Flasher.db.txt"
 # Khoá "đặc biệt" trong db.txt dùng để ghi nhớ lựa chọn loại ESP (không phải sản phẩm).
 CHIP_DB_KEY = "__chip__"
+# Khoá "đặc biệt" ghi nhớ thư mục vừa duyệt ở BƯỚC 2 (mở lại hộp thoại đúng chỗ cũ).
+BROWSE_DIR_DB_KEY = "__browse_dir__"
+# Giá trị đặc biệt cho mục "Duyệt thư mục khác..." ở BƯỚC 2.
+BROWSE_OPTION = "__browse__"
+BROWSE_LABEL = "Duyệt thư mục khác..."
 
 IS_WINDOWS = os.name == "nt"
 
@@ -490,6 +497,58 @@ def valid_slot_path(p):
     return os.path.isfile(p)
 
 
+def _tk_pick_dir(title, initialdir=None):
+    """Hộp thoại chọn THƯ MỤC (tkinter).
+
+    Trả về (folder, unavailable):
+        folder = "" khi người dùng hủy; đường dẫn khi đã chọn.
+        unavailable = True khi không mở được hộp thoại (thiếu tkinter).
+    """
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception:
+        return (None, True)
+    root = None
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        root.update()
+        folder = filedialog.askdirectory(title=title, initialdir=initialdir,
+                                         mustexist=True)
+    except Exception:
+        return (None, True)
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+    time.sleep(0.05)
+    _focus_console()
+    return (folder or "", False)
+
+
+def pick_directory(initialdir=None):
+    """Chọn thư mục chứa file bin (hộp thoại + fallback nhập thủ công).
+    Trả về đường dẫn tuyệt đối hoặc None nếu hủy."""
+    folder, unavailable = _tk_pick_dir("Chọn thư mục chứa file bin",
+                                       initialdir=initialdir)
+    if unavailable:
+        print("  (Hộp thoại không khả dụng — vui lòng nhập đường dẫn thủ công)")
+        path = input("  Đường dẫn thư mục (Enter để bỏ qua): ").strip().strip('"')
+        if not path:
+            return None
+        if not os.path.isdir(path):
+            warn(f"Không tìm thấy thư mục: {path}")
+            return None
+        return os.path.abspath(path)
+    if not folder:
+        return None
+    return os.path.abspath(folder)
+
+
 # ---------------------------------------------------------------------------
 # ĐANG KIỂM TRA ESP-TOOL-CLI
 # ---------------------------------------------------------------------------
@@ -600,15 +659,49 @@ def scan_products():
     return products
 
 
-def select_product(products):
-    def _items():
-        return [(name, name) for name, _ in scan_products()]
-    items = [(name, name) for name, _ in products]
-    if not items:
-        warn("Không có thư mục sản phẩm nào (quét các thư mục con cùng cấp với exe).")
-        return None
+def is_external_product(key):
+    """True nếu khoá db là THƯ MỤC NGOÀI (đường dẫn tuyệt đối, do "Duyệt thư mục
+    khác..." ở BƯỚC 2) thay vì tên thư mục con nằm cùng cấp với exe."""
+    s = str(key)
+    return bool(s) and not s.startswith("__") and os.path.isabs(s)
+
+
+def product_display_name(product):
+    """Tên hiển thị gọn của sản phẩm (thư mục ngoài -> chỉ hiện tên thư mục)."""
+    if is_external_product(product):
+        base = os.path.basename(str(product).rstrip("\\/"))
+        return base or str(product)
+    return str(product)
+
+
+def external_products(db):
+    """Danh sách THƯ MỤC SẢN PHẨM NGOÀI đã dùng (khoá db là đường dẫn tuyệt đối,
+    chỉ giữ khi thư mục còn tồn tại) - xếp theo tên thư mục."""
+    paths = [str(k) for k in db.keys()
+             if is_external_product(k) and os.path.isdir(str(k))]
+    return sorted(paths, key=lambda p: os.path.basename(p).lower())
+
+
+def select_product(db):
+    """BƯỚC 2: chọn sản phẩm phần cứng, sản phẩm ngoài đã dùng, hoặc duyệt thư mục khác.
+
+    Trả về: tên thư mục sản phẩm (cạnh exe) | đường dẫn tuyệt đối (thư mục ngoài)
+    | BROWSE_OPTION (chọn "Duyệt thư mục khác...") | None (ESC).
+    """
+    def _build():
+        found = scan_products()
+        items = [(name, name) for name, _ in found]
+        width = console_width()
+        # Thư mục ngoài trùng với thư mục sản phẩm cạnh exe -> không liệt kê lần hai
+        known = {os.path.normcase(os.path.abspath(d)) for _, d in found}
+        for path in external_products(db):
+            if os.path.normcase(os.path.abspath(path)) in known:
+                continue
+            items.append((truncate_line(f"[ngoài] {path}", width), path))
+        items.append((BROWSE_LABEL, BROWSE_OPTION))
+        return items
     return arrow_menu("BƯỚC 2: CHỌN SẢN PHẨM PHẦN CỨNG",
-                      items, allow_refresh=True, refresh_fn=_items)
+                      _build(), allow_refresh=True, refresh_fn=_build)
 
 
 # ---------------------------------------------------------------------------
@@ -648,12 +741,20 @@ def sync_products_db(db, product_names):
     """Đồng bộ thư mục sản phẩm với db:
     - Có trong db nhưng thư mục không còn tồn tại -> xoá khỏi db.
     - Thư mục sản phẩm có thật nhưng chưa có trong db -> thêm vào db (mapping rỗng).
+    - Khoá là THƯ MỤC NGOÀI (đường dẫn tuyệt đối, do "Duyệt thư mục khác...")
+      được giữ lại chừng nào thư mục còn tồn tại.
     """
     names = set(product_names)
     changed = False
     for key in list(db.keys()):
-        if str(key).startswith("__"):
+        s = str(key)
+        if s.startswith("__"):
             continue    # khoá đặc biệt (vd __chip__) - không phải sản phẩm
+        if is_external_product(s):
+            if not os.path.isdir(s):
+                del db[key]
+                changed = True
+            continue
         if key not in names:
             del db[key]
             changed = True
@@ -668,9 +769,8 @@ def sync_products_db(db, product_names):
 # ---------------------------------------------------------------------------
 # BƯỚC 3 - Chọn lần lượt các file bin (+ combine.bin) cho sản phẩm
 # ---------------------------------------------------------------------------
-def configure_product_files(product_name, product_dir, db, profile, save_to_db=True):
-    """BƯỚC 3: menu chọn LẦN LƯỢT các file bin cho sản phẩm; lưu vào db
-    (save_to_db=False khi chọn file ngoài, không ghi nhớ db).
+def configure_product_files(product_name, product_dir, db, profile):
+    """BƯỚC 3: menu chọn LẦN LƯỢT các file bin cho sản phẩm; lưu lựa chọn vào db.
     Các slot hiển thị phụ thuộc LOẠI ESP đã chọn ở BƯỚC 1 (profile)."""
     slot_kinds = tuple(profile["kinds"]) + ("combined",)
     # Chỉ nạp lại các file db tồn tại thật trên đĩa;
@@ -682,10 +782,9 @@ def configure_product_files(product_name, product_dir, db, profile, save_to_db=T
     entered = False
 
     def _persist():
-        """Lưu ngay mapping hiện tại vào db (nếu có lưu)."""
-        if save_to_db:
-            db[product_name] = mapping
-            save_db(db)
+        """Lưu ngay mapping hiện tại vào db."""
+        db[product_name] = mapping
+        save_db(db)
 
     while True:
         items = []
@@ -704,11 +803,9 @@ def configure_product_files(product_name, product_dir, db, profile, save_to_db=T
             idx = len(items) - 1
             entered = True
 
-        title = (f"  BƯỚC 3: CHỌN FILE CHO SẢN PHẨM \"{product_name}\" "
-                 f"[{chip_label(profile['key'])}]"
-                 if save_to_db else "  BƯỚC 3: CHỌN FILE BIN NGOÀI (KHÔNG LƯU)")
-        note = ("  ENTER tại 'Tiếp theo >>>' để lưu & tiếp tục."
-                if save_to_db else "  ENTER tại 'Tiếp theo >>>' để tiếp tục (không lưu).")
+        title = (f"  BƯỚC 3: CHỌN FILE CHO SẢN PHẨM \"{product_display_name(product_name)}\" "
+                 f"[{chip_label(profile['key'])}]")
+        note = "  ENTER tại 'Tiếp theo >>>' để lưu & tiếp tục."
         header = [
             "=" * 62,
             title,
@@ -748,11 +845,8 @@ def configure_product_files(product_name, product_dir, db, profile, save_to_db=T
         elif key == "enter":
             value = items[idx][1]
             if value == "__done__":
-                if save_to_db:
-                    _persist()
-                    ok("Đã lưu lựa chọn file vào db.")
-                else:
-                    ok("Không lưu lựa chọn (chế độ file ngoài).")
+                _persist()
+                ok("Đã lưu lựa chọn file vào db.")
                 return mapping
             default_dir = None
             cur = mapping.get(value)
@@ -1187,32 +1281,37 @@ def main():
         products = scan_products()
         sync_products_db(db, [n for n, _ in products])
 
-        product = None
-        product_dir = None
-        save_to_db = True
+        # BƯỚC 2: chọn sản phẩm phần cứng / sản phẩm ngoài đã dùng / duyệt thư mục khác
+        product = select_product(db)
+        if product is None:
+            return 0    # ESC hủy -> đóng ứng dụng
 
-        if not products:
-            # Không có thư mục sản phẩm -> cho phép chọn file bin NGOÀI (không lưu db)
-            print()
-            print(red("  KHÔNG TÌM THẤY THƯ MỤC SẢN PHẨM!"))
-            print(red("  Không có thư mục sản phẩm nào cùng cấp với file exe."))
-            print()
-            if not ask_yn(red("  Tiếp tục chọn file bin ngoài để flash?")):
-                return 0    # từ chối -> đóng ứng dụng
-            product = "(file ngoài)"
-            save_to_db = False
+        if product == BROWSE_OPTION:
+            # "Duyệt thư mục khác...": chọn thư mục bin nằm ở nơi khác (không cần cạnh exe)
+            last_dir = db.get(BROWSE_DIR_DB_KEY)
+            if not (isinstance(last_dir, str) and os.path.isdir(last_dir)):
+                last_dir = exe_dir()
+            folder = pick_directory(last_dir)
+            if not folder:
+                continue    # hủy hộp thoại -> quay lại BƯỚC 2
+            db[BROWSE_DIR_DB_KEY] = folder
+            # Nếu vừa duyệt đúng một thư mục sản phẩm cạnh exe -> dùng tên sản phẩm đó
+            product = next((n for n, d in products
+                            if os.path.normcase(os.path.abspath(d))
+                            == os.path.normcase(folder)), folder)
+
+        if is_external_product(product):
+            # Thư mục NGOÀI: db lưu theo đường dẫn tuyệt đối (lần sau chọn nhanh)
+            product_dir = str(product)
+            db.setdefault(product_dir, {})
         else:
-            # BƯỚC 2: chọn sản phẩm phần cứng
-            product = select_product(products)
-            if product is None:
-                return 0    # ESC hủy -> đóng ứng dụng
             product_dir = next((d for n, d in products if n == product), None)
+        save_db(db)
 
         # BƯỚC 3: chọn lần lượt các file bin (+ combine) - ghi nhớ db
-        mapping = configure_product_files(product, product_dir, db, profile,
-                                          save_to_db=save_to_db)
+        mapping = configure_product_files(product, product_dir, db, profile)
         if mapping is None:
-            continue    # ESC -> quay lại đầu (chọn sản phẩm / hỏi lại)
+            continue    # ESC -> quay lại đầu (chọn sản phẩm)
         if not mapping:
             warn("Không có file bin nào được chọn.")
             continue
@@ -1236,7 +1335,9 @@ def main():
         print("  TÓM TẮT CẤU HÌNH")
         print("=" * 62)
         print(f"  Loại ESP : {chip_label(chip_key)}  (--chip {profile['chip']})")
-        print(f"  Sản phẩm : {product}")
+        print(f"  Sản phẩm : {product_display_name(product)}")
+        if is_external_product(product):
+            print(f"  Thư mục  : {product_dir}")
         print(f"  Cổng COM : {port}")
         print(f"  Chế độ   : {'AUTO MULTI FLASH' if mode == 'auto' else 'CONFIRM MULTI FLASH'}")
         print("  Files    :")
@@ -1258,7 +1359,7 @@ def main():
         print("  BƯỚC 6: VÒNG LẶP FLASH")
         print("=" * 62)
         print(f"  Loại ESP : {chip_label(chip_key)}")
-        print(f"  Sản phẩm : {product}")
+        print(f"  Sản phẩm : {product_display_name(product)}")
         print(f"  Cổng COM : {port}")
         print(f"  Chế độ   : {'AUTO MULTI FLASH' if mode == 'auto' else 'CONFIRM MULTI FLASH'}")
         print()
