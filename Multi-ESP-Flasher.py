@@ -58,12 +58,12 @@ IS_WINDOWS = os.name == "nt"
 CHIP_PROFILES = {
     "esp32": {
         "key":    "esp32",
-        "label":  "ESP32     | bootloader 0x1000 · app 0x10000 · spiffs 0x290000",
+        "label":  "ESP32     | bootloader 0x1000 · app 0x10000 · spiffs 0x3a0000",
         "chip":   "esp32",
         "baud":   "921600",
         "kinds":  ("bootloader", "partitions", "firmware", "spiffs"),
         "addr":   {"bootloader": "0x1000", "partitions": "0x8000",
-                   "firmware": "0x10000", "spiffs": "0x290000"},
+                   "firmware": "0x10000", "spiffs": "0x3a0000"},
         "erase_ota": ("0xE000", "0x2000"),
         "combined_addr": "0x0",
     },

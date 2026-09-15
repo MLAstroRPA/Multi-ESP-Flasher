@@ -6,7 +6,7 @@ Công cụ CLI **flash liên tục (multi-flash)** cho nhiều thiết bị **ES
 
 | Loại | `--chip` | Baud | File rời & offset |
 |---|---|---|---|
-| **ESP32** (mặc định) | `esp32` | 921600 | `bootloader.bin` `0x1000` · `partitions.bin` `0x8000` · `firmware.bin` `0x10000` · `spiffs.bin` `0x290000` |
+| **ESP32** (mặc định) | `esp32` | 921600 | `bootloader.bin` `0x1000` · `partitions.bin` `0x8000` · `firmware.bin` `0x10000` · `spiffs.bin` `0x3a0000` |
 | **ESP32-S3** | `esp32s3` | 921600 | `bootloader.bin` `0x0` · `partitions.bin` `0x8000` · `firmware.bin` `0x10000` · `spiffs.bin` `0x290000` |
 | **ESP32-C3** | `esp32c3` | 921600 | `bootloader.bin` `0x0` · `partitions.bin` `0x8000` · `firmware.bin` `0x10000` · `spiffs.bin` `0x290000` |
 | **ESP8266** | `esp8266` | 460800 | `firmware.bin` `0x0` · `spiffs.bin` `0x100000` |
